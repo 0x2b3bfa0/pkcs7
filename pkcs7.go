@@ -86,8 +86,10 @@ var (
 	OIDEncryptionAlgorithmECDSAP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
 
 	// Asymmetric Encryption Algorithms
-	OIDEncryptionAlgorithmRSA       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1} // see https://www.rfc-editor.org/rfc/rfc8017#appendix-A.2.2
-	OIDEncryptionAlgorithmRSAESOAEP = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 7} // see https://www.rfc-editor.org/rfc/rfc8017#appendix-A.2.1
+	OIDEncryptionAlgorithmRSA       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}  // see https://www.rfc-editor.org/rfc/rfc8017#appendix-A.2.2
+	OIDEncryptionAlgorithmRSAESOAEP = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 7}  // see https://www.rfc-editor.org/rfc/rfc8017#appendix-A.2.1
+	OIDEncryptionAlgorithmRSASSAPSS = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10} // see https://www.rfc-editor.org/rfc/rfc8017#appendix-A.2.3
+	OIDDigestAlgorithmMGF1          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 8}  // see https://www.rfc-editor.org/rfc/rfc8017#appendix-B.2.1
 
 	// Symmetric Encryption Algorithms
 	OIDEncryptionAlgorithmDESCBC     = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}               // see https://www.rfc-editor.org/rfc/rfc8018.html#appendix-B.2.1
@@ -112,6 +114,22 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
+}
+
+// getOIDForHash is the inverse of getHashForOID: the digest algorithm OID for a
+// crypto.Hash.
+func getOIDForHash(h crypto.Hash) (asn1.ObjectIdentifier, error) {
+	switch h {
+	case crypto.SHA1:
+		return OIDDigestAlgorithmSHA1, nil
+	case crypto.SHA256:
+		return OIDDigestAlgorithmSHA256, nil
+	case crypto.SHA384:
+		return OIDDigestAlgorithmSHA384, nil
+	case crypto.SHA512:
+		return OIDDigestAlgorithmSHA512, nil
+	}
+	return nil, fmt.Errorf("pkcs7: unsupported hash %v", h)
 }
 
 // getDigestOIDForSignatureAlgorithm takes an x509.SignatureAlgorithm
