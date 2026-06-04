@@ -290,6 +290,13 @@ func (err *MessageDigestMismatchError) Error() string {
 
 func getSignatureAlgorithm(digestEncryption, digest pkix.AlgorithmIdentifier) (x509.SignatureAlgorithm, error) {
 	switch {
+	// id-RSASSA-PSS carries the digest in its parameters, not the OID.
+	case digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmRSASSAPSS):
+		hash, err := pssHashFromParams(digestEncryption.Parameters)
+		if err != nil {
+			return -1, err
+		}
+		return pssSignatureAlgorithmForHash(hash)
 	case digestEncryption.Algorithm.Equal(OIDDigestAlgorithmECDSASHA1):
 		return x509.ECDSAWithSHA1, nil
 	case digestEncryption.Algorithm.Equal(OIDDigestAlgorithmECDSASHA256):

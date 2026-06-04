@@ -196,7 +196,8 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	h := hash.New()
 	h.Write(sd.data)
 	sd.messageDigest = h.Sum(nil)
-	encryptionOid, err := getOIDForEncryptionAlgorithm(pkey, sd.digestOid)
+
+	sigAlgID, signerOpts, err := sd.signatureAlgorithm(pkey, hash)
 	if err != nil {
 		return err
 	}
@@ -220,7 +221,7 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 		return err
 	}
 	// create signature of signed attributes
-	signature, err := signAttributes(finalAttrs, pkey, hash)
+	signature, err := signAttributes(finalAttrs, pkey, signerOpts)
 	if err != nil {
 		return err
 	}
@@ -228,7 +229,7 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 		AuthenticatedAttributes:   finalAttrs,
 		UnauthenticatedAttributes: finalUnsignedAttrs,
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: sd.digestOid},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: encryptionOid},
+		DigestEncryptionAlgorithm: sigAlgID,
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
@@ -258,6 +259,10 @@ func (sd *SignedData) SignWithoutAttr(ee *x509.Certificate, pkey crypto.PrivateK
 	h := hash.New()
 	h.Write(sd.data)
 	sd.messageDigest = h.Sum(nil)
+	sigAlgID, signerOpts, err := sd.signatureAlgorithm(pkey, hash)
+	if err != nil {
+		return err
+	}
 	switch pkey := pkey.(type) {
 	case *dsa.PrivateKey:
 		// dsa doesn't implement crypto.Signer so we make a special case
@@ -275,7 +280,7 @@ func (sd *SignedData) SignWithoutAttr(ee *x509.Certificate, pkey crypto.PrivateK
 		if !ok {
 			return errors.New("pkcs7: private key does not implement crypto.Signer")
 		}
-		signature, err = key.Sign(rand.Reader, sd.messageDigest, hash)
+		signature, err = key.Sign(rand.Reader, sd.messageDigest, signerOpts)
 		if err != nil {
 			return err
 		}
@@ -284,22 +289,13 @@ func (sd *SignedData) SignWithoutAttr(ee *x509.Certificate, pkey crypto.PrivateK
 	ias.SerialNumber = ee.SerialNumber
 	// no parent, the issue is the end-entity cert itself
 	ias.IssuerName = asn1.RawValue{FullBytes: ee.RawIssuer}
-	if sd.encryptionOid == nil {
-		// if the encryption algorithm wasn't set by SetEncryptionAlgorithm,
-		// infer it from the digest algorithm
-		sd.encryptionOid, err = getOIDForEncryptionAlgorithm(pkey, sd.digestOid)
-	}
-	if err != nil {
-		return err
-	}
 	signer := signerInfo{
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: sd.digestOid},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: sd.encryptionOid},
+		DigestEncryptionAlgorithm: sigAlgID,
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
 	}
-	// create signature of signed attributes
 	sd.certs = append(sd.certs, ee)
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
 	return nil
@@ -394,13 +390,37 @@ func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 	return ias, nil
 }
 
-// signs the DER encoded form of the attributes with the private key
-func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.Hash) ([]byte, error) {
+// signatureAlgorithm returns the SignerInfo signatureAlgorithm and the matching
+// signer options for the scheme selected on sd. An algorithm pinned via
+// SetEncryptionAlgorithm is honoured: RSASSA-PSS yields id-RSASSA-PSS with its
+// parameters and PSS options, any other OID is used as-is; otherwise the
+// algorithm is inferred from the key and digest, with a bare crypto.Hash.
+func (sd *SignedData) signatureAlgorithm(pkey crypto.PrivateKey, hash crypto.Hash) (pkix.AlgorithmIdentifier, crypto.SignerOpts, error) {
+	switch {
+	case sd.encryptionOid.Equal(OIDEncryptionAlgorithmRSASSAPSS):
+		algID, err := PSSAlgorithmIdentifier(hash)
+		if err != nil {
+			return pkix.AlgorithmIdentifier{}, nil, err
+		}
+		return algID, pssSignOptions(hash), nil
+	case len(sd.encryptionOid) > 0:
+		return pkix.AlgorithmIdentifier{Algorithm: sd.encryptionOid}, hash, nil
+	}
+	encryptionOid, err := getOIDForEncryptionAlgorithm(pkey, sd.digestOid)
+	if err != nil {
+		return pkix.AlgorithmIdentifier{}, nil, err
+	}
+	return pkix.AlgorithmIdentifier{Algorithm: encryptionOid}, hash, nil
+}
+
+// signs the DER encoded form of the attributes with the private key. signerOpts
+// is the bare crypto.Hash for PKCS#1 v1.5 / ECDSA, or *rsa.PSSOptions for PSS.
+func signAttributes(attrs []attribute, pkey crypto.PrivateKey, signerOpts crypto.SignerOpts) ([]byte, error) {
 	attrBytes, err := marshalAttributes(attrs)
 	if err != nil {
 		return nil, err
 	}
-	h := digestAlg.New()
+	h := signerOpts.HashFunc().New()
 	h.Write(attrBytes)
 	hash := h.Sum(nil)
 
@@ -419,7 +439,7 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.
 	if !ok {
 		return nil, errors.New("pkcs7: private key does not implement crypto.Signer")
 	}
-	return key.Sign(rand.Reader, hash, digestAlg)
+	return key.Sign(rand.Reader, hash, signerOpts)
 }
 
 type dsaSignature struct {
